@@ -5,25 +5,22 @@ import CssBaseline from '@material-ui/core/CssBaseline';
 import AppBar from '@material-ui/core/AppBar';
 import Toolbar from '@material-ui/core/Toolbar';
 import Typography from '@material-ui/core/Typography';
+import Box from '@material-ui/core/Box';
 import Container from '@material-ui/core/Container';
+import {Button} from "@material-ui/core";
 import IconButton from '@material-ui/core/IconButton';
 import DeleteIcon from '@material-ui/icons/Delete';
-import Grid from '@material-ui/core/Grid';
 import Paper from '@material-ui/core/Paper';
 import SearchBar from "material-ui-search-bar";
-import InputLabel from '@material-ui/core/InputLabel';
-import MenuItem from '@material-ui/core/MenuItem';
-import FormControl from '@material-ui/core/FormControl';
-import FormControlLabel from '@material-ui/core/FormControlLabel';
 import Switch from '@material-ui/core/Switch';
-import Select from '@material-ui/core/Select';
 import TableHead from "@material-ui/core/TableHead";
 import TableRow from "@material-ui/core/TableRow";
 import TableCell from "@material-ui/core/TableCell";
 import Title from "../mtpm/Title";
 import Table from "@material-ui/core/Table";
 import TableBody from "@material-ui/core/TableBody";
-import Summary from "../mtpm/Summary";
+import { v4 as uuid } from 'uuid';
+import socketClient  from "socket.io-client";
 
 const drawerWidth = 180;
 
@@ -125,7 +122,6 @@ function create_table_headers() {
           <TableCell align="center">Price</TableCell>
           <TableCell align="center">Prev close</TableCell>
           <TableCell align="center">% chg</TableCell>
-          <TableCell align="center">% chg since open</TableCell>
           <TableCell align="center">Stream data</TableCell>
           <TableCell align="center"></TableCell>
         </TableRow>
@@ -133,8 +129,8 @@ function create_table_headers() {
   );
 }
 
-function createData(id, ticker, currency, price, prev_close, pct_chg, pct_chg_since_open) {
-  return { id, ticker, currency, price, prev_close, pct_chg, pct_chg_since_open };
+function createData(id, ticker, currency, price, prev_close, pct_chg) {
+  return { id, ticker, currency, price, prev_close, pct_chg };
 }
 
 function format_number(number, offset='', digits=2) {
@@ -175,6 +171,9 @@ function format_number_cell(number, offset='', digits=2, apply_color=false) {
 }
 
 const TIMER_MS = 3000;
+const ENDPOINT = "http://localhost:8080";
+const IP_ADDR_1 = ["192.168.0.5", "127.0.0.1"];
+const IP_ADDR_2 = ["192.168.0.12", "10.30.144.147"];
 
 class Ticker extends Component {
   constructor(props) {
@@ -184,38 +183,85 @@ class Ticker extends Component {
       tickers: new Map(),
       rows: [],
       tid: 0,
-      prices: new Map(),
-      prev_prices: new Map(),
+      data: new Map(),
+      socket: null,
+      ip_addr: IP_ADDR_1,
+      client_id: uuid(),
+      button_checked: new Map()
     };
 
     this.update_prices = this.update_prices.bind(this);
-  }
-
-  update_prices() {
-    this.state.rows.forEach((r, i) => {
-      r.pct_chg += 1;
-      r.pct_chg_since_open += 1;
-    });
-
-    this.setState(this.state);
-  }
-
-  componentDidMount() {
+    this.request_market_data = this.request_market_data.bind(this);
     setInterval(this.update_prices, TIMER_MS);
   }
 
-  // function createData(id, ticker, currency, price, prev_close, pct_chg, pct_chg_since_open, pos, tvr) {
+  update_prices() {
+    this.state.rows.forEach((data, i) => {
+      if (this.state.data.has(data.id)) {
+        const new_data = this.state.data.get(data.id);
+
+        if (data.currency === '-') {
+          data.currency = new_data.currency;
+        }
+
+        if (new_data.price > 0) {
+          data.price = new_data.price;
+        }
+
+        if (new_data.prev_close > 0) {
+          data.prev_close = new_data.prev_close;
+        }
+
+        if (data.prev_close > 0) {
+          data.pct_chg = (data.price / data.prev_close - 1.0) * 100.;
+        }
+      }
+    });
+
+    this.setState({rows: this.state.rows});
+  }
+
+  request_market_data(id) {
+    let sock = this.state.socket;
+
+    if (sock === null) {
+      sock = socketClient(ENDPOINT, { transports: ['websocket'] });
+      sock.emit("handshake", {id: this.state.client_id, ip_addr: this.state.ip_addr});
+
+      sock.on("price", data => {
+        console.log(`message received: ${JSON.stringify(data)}`);
+        this.state.data.set(data.id, data);
+      });
+
+      sock.on("requestInvalidated", data => {
+        console.log(`reqId ${data.id} invalidated`);
+
+        if (this.state.button_checked.get(data.id)) {
+          this.state.button_checked.set(data.id, false);
+          this.setState({button_checked: this.state.button_checked});
+        }
+      });
+
+      this.setState({socket: sock});
+    }
+
+    sock.emit("requestPrice", {id: id, ticker: this.state.tickers.get(id)});
+  }
+
   render() {
     const { classes } = this.props;
 
     const handleSearch = (ticker) => {
       let id = this.state.tid;
-      this.setState({tid: id + 1});
       this.state.tickers.set(id, ticker);
 
       this.state.rows.push(createData(
-          id, ticker, '-', NaN, NaN, 0, 0
+          id, ticker, '-', NaN, NaN, 0
       ));
+
+      this.state.button_checked.set(id, false);
+      this.state.tid += 1;
+      this.setState(this.state);
     };
 
     return (
@@ -261,23 +307,27 @@ class Ticker extends Component {
                           {format_number_cell(row.price, '', 2, false)}
                           {format_number_cell(row.prev_close, '', 2, false)}
                           {format_number_cell(row.pct_chg, '', 2, true)}
-                          {format_number_cell(row.pct_chg_since_open, '', 2, true)}
 
                           <TableCell align="center">
                             <Switch
                                 size="small"
                                 color="primary"
+                                checked={this.state.button_checked.get(row.id)}
                                 onChange={(event) => {
                                   if (event.target.checked) {
                                     console.log(`requesting market data for ${row.ticker}`);
-                                    // TODO
+                                    this.request_market_data(row.id);
                                   }
 
                                   else {
                                     console.log(`cancelling market data for ${row.ticker}`);
-
+                                    this.state.socket.emit("invalidateRequest", { id: row.id });
                                   }
 
+                                  if (event.target.checked !== this.state.button_checked.get(row.id)) {
+                                    this.state.button_checked.set(row.id, event.target.checked);
+                                    this.setState({button_checked: this.state.button_checked});
+                                  }
                                 }}
                             />
                           </TableCell>
@@ -286,11 +336,8 @@ class Ticker extends Component {
                             <IconButton
                                 size="small"
                                 onClick={() => {
-                                  this.state.rows.forEach((r, i) => {
-                                    if (r.id === row.id) {
-                                      this.state.rows.splice(i, 1);
-                                      this.setState(this.state);
-                                    }
+                                  this.setState({
+                                    rows: this.state.rows.filter((r) => { return r.id !== row.id; })
                                   });
                                 }}
                             >
@@ -305,6 +352,14 @@ class Ticker extends Component {
                   </Table>
                 </React.Fragment>
               </Paper>
+
+              <Box pt={3}>
+                <Button fullWidth={true} onClick={() => {this.setState({ip_addr: IP_ADDR_2})}}>
+                  <Typography variant="body2" color="textSecondary" align="center">
+                    {`running on ${this.state.ip_addr[0]}`}
+                  </Typography>
+                </Button>
+              </Box>
 
             </Container>
 

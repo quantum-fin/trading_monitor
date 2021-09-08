@@ -24,10 +24,6 @@ let daily_rows = [
 let mtd_row = createData(6, '2021.08', 1340, -1341, 2455, 16e6, 30e3)
 let ytd_row = createData(7, '2021', 1340, -1341, 2455, 16e6, 30e3)
 
-function preventDefault(event) {
-  event.preventDefault();
-}
-
 function format_number(number, offset='', digits=2) {
   if (offset === 'M') {
     number /= 10 ** 6;
